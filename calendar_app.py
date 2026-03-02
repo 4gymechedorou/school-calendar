@@ -3,20 +3,20 @@ from streamlit_calendar import calendar
 import pandas as pd
 from datetime import datetime
 from icalendar import Calendar
-import os
 import re
 import streamlit.components.v1 as components
+from streamlit_gsheets import GSheetsConnection
 
 # Ρυθμίσεις Εφαρμογής
-st.set_page_config(page_title="Σχολικό Ημερολόγιο v37", layout="wide")
+st.set_page_config(page_title="Σχολικό Ημερολόγιο Web", layout="wide")
 
-DB_FILE = "school_database.csv"
-TEACHERS_DB = "teachers_data.csv"
 DEPARTMENTS = ["Α1", "Α2", "Α3", "Α4", "Β1", "Β2", "Β3", "Γ1", "Γ2", "Γ3"]
 HOURS = [str(i) for i in range(1, 8)]
 LESSONS = ["ΤΕΧΝΟΛΟΓΙΑ", "ΠΛΗΡΟΦΟΡΙΚΗ", "ΟΙΚ. ΟΙΚΟΝ.", "ΒΙΟΛΟΓΙΑ", "ΦΥΣΙΚΗ", "ΧΗΜΕΙΑ", "ΜΑΘΗΜΑΤΙΚΑ", "ΓΛΩΣΣΑ", "ΑΡΧΑΙΑ", "ΘΡΗΣΚΕΥΤΙΚΑ", "ΛΟΓΟΤΕΧΝΙΑ", "ΕΡΓΑΣΤΗΡΙΟ ΔΕΞΙΟΤΗΤΩΝ", "ΜΟΥΣΙΚΗ", "ΙΣΤΟΡΙΑ", "ΜΕΤΑΦΡΑΣΗ", "ΚΑΛΛΙΤΕΧΝΙΚΑ", "ΓΕΩΓΡΑΦΙΑ", "ΑΓΓΛΙΚΑ", "ΓΕΡΜΑΝΙΚΑ", "ΓΑΛΛΙΚΑ", "ΓΥΜΝΑΣΤΙΚΗ", "Κ.Π.Α.", "ΟΙΚΟΝΟΜΙΚΑ"]
 
-# --- ΗΧΟΣ ΑΠΟΡΡΙΨΗΣ (OFFLINE BUZZER) ---
+conn = st.connection("gsheets", type=GSheetsConnection)
+
+# --- ΗΧΟΣ ΑΠΟΡΡΙΨΗΣ ---
 def play_error_sound():
     components.html(
         """
@@ -37,30 +37,30 @@ def play_error_sound():
         height=0, width=0
     )
 
-# --- ΛΕΙΤΟΥΡΓΙΕΣ ΔΕΔΟΜΕΝΩΝ ---
+# --- ΛΕΙΤΟΥΡΓΙΕΣ GOOGLE SHEETS ---
 def load_data():
-    if not os.path.exists(DB_FILE):
-        return pd.DataFrame(columns=['id', 'title', 'start', 'type', 'dept', 'teacher', 'lesson', 'hours', 'created_at', 'notes', 'color'])
     try:
-        df = pd.read_csv(DB_FILE, encoding='utf-16').fillna("")
+        df = conn.read(ttl=0).dropna(how="all")
+        df['id'] = df.index.astype(str)
+        return df.fillna("")
     except:
-        df = pd.read_csv(DB_FILE).fillna("")
-    df['id'] = df.index.astype(str)
-    return df
+        return pd.DataFrame(columns=['id', 'title', 'start', 'type', 'dept', 'teacher', 'lesson', 'hours', 'created_at', 'notes', 'color'])
 
 def save_data(df_to_save):
     if 'id' in df_to_save.columns:
         df_to_save = df_to_save.drop(columns=['id'])
-    df_to_save.to_csv(DB_FILE, index=False, encoding='utf-16')
+    conn.update(data=df_to_save)
 
 def get_saved_teachers():
     base_list = ["ΚΕΝΟ"]
-    if os.path.exists(TEACHERS_DB):
-        saved = pd.read_csv(TEACHERS_DB)['name'].astype(str).tolist()
+    try:
+        df_t = conn.read(worksheet="teachers", ttl=0).dropna(how="all")
+        saved = df_t['name'].dropna().astype(str).tolist()
         return base_list + saved
-    return base_list
+    except:
+        return base_list
 
-# --- ΕΛΕΓΧΟΣ ΠΕΡΙΟΡΙΣΜΩΝ (1 ΑΝΑ ΗΜΕΡΑ, 3 ΑΝΑ ΕΒΔΟΜΑΔΑ ΓΙΑ ΔΙΑΓΩΝΙΣΜΑΤΑ) ---
+# --- ΕΛΕΓΧΟΣ ΠΕΡΙΟΡΙΣΜΩΝ ---
 def check_constraints(df, date_str, dept, entry_type, exclude_idx=None):
     if dept == "ΣΧΟΛΕΙΟ": return True, ""
     
@@ -115,7 +115,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- SIDEBAR (ΚΑΤΑΧΩΡΗΣΗ & ΑΡΧΕΙΑ) ---
+# --- SIDEBAR ---
 with st.sidebar:
     st.markdown('<p class="sidebar-header">🛠️ Διαχείριση</p>', unsafe_allow_html=True)
     st.subheader("📝 Νέα Καταχώρηση")
@@ -165,9 +165,11 @@ with st.sidebar:
         try:
             df_k = pd.read_excel(up_xlsx, usecols=[1], skiprows=4, header=None)
             t_list = sorted(df_k[1].dropna().astype(str).str.strip().unique().tolist())
-            pd.DataFrame({'name': t_list}).to_csv(TEACHERS_DB, index=False); st.success("Η λίστα εκπαιδευτικών ενημερώθηκε!")
+            df_to_save = pd.DataFrame({'name': t_list})
+            conn.update(worksheet="teachers", data=df_to_save)
+            st.success("Η λίστα εκπαιδευτικών ενημερώθηκε!")
             st.rerun()
-        except: st.error("Σφάλμα στην ανάγνωση του Excel.")
+        except: st.error("Σφάλμα. Βεβαιωθείτε ότι υπάρχει η καρτέλα 'teachers' στο Sheet.")
 
     up_ics = st.file_uploader("Εισαγωγή .ics (Google Calendar)", type=['ics'])
     if up_ics and st.button("🚀 IMPORT ICS"):
@@ -196,13 +198,13 @@ with st.sidebar:
 # --- ΚΥΡΙΩΣ ΟΘΟΝΗ ---
 col_t1, col_t2 = st.columns([5, 1])
 with col_t1:
-    st.title("🏫 Σχολικό Ημερολόγιο v37")
+    st.title("🏫 Σχολικό Ημερολόγιο Web")
 with col_t2:
     st.write("") 
     if st.button("🔄 ΑΝΑΝΕΩΣΗ ΔΕΔΟΜΕΝΩΝ", use_container_width=True):
+        st.cache_data.clear()
         st.rerun()
 
-# 1. ΥΠΟΜΝΗΜΑ
 st.markdown("""
     <div class="legend-container">
         <span class="legend-item red-bg">🔴 ΔΙΑΓΩΝΙΣΜΑ</span>
@@ -213,7 +215,6 @@ st.markdown("""
 
 df = load_data()
 
-# 2. ΕΠΙΚΟΛΛΗΣΗ ΜΕ ΕΛΕΓΧΟ ΠΕΡΙΟΡΙΣΜΩΝ
 if "clipboard" in st.session_state:
     with st.container(border=True):
         st.info(f"📋 Έτοιμο για επικόλληση: {st.session_state.clipboard['title']}")
@@ -231,18 +232,17 @@ if "clipboard" in st.session_state:
                 st.error(f"**{msg}**", icon="🛑")
                 play_error_sound()
 
-# 3. ΦΙΛΤΡΑ (ΠΡΟΣΤΕΘΗΚΕ ΤΟ ΦΙΛΤΡΟ ΤΥΠΟΥ)
 f1, f2, f3 = st.columns(3)
 f_dept = f1.multiselect("🔍 Τμήμα", ["ΟΛΑ"] + DEPARTMENTS, default="ΟΛΑ", key="filter_dept")
 f_teach = f2.multiselect("🔍 Καθηγητής", ["ΟΛΟΙ"] + curr_teachers, default="ΟΛΟΙ", key="filter_teach")
 f_type = f3.multiselect("🔍 Τύπος", ["ΟΛΟΙ", "Διαγώνισμα", "Τεστ", "Δράση"], default="ΟΛΟΙ", key="filter_type")
 
 df_view = df.copy()
-if "ΟΛΑ" not in f_dept: df_view = df_view[df_view['dept'].isin(f_dept)]
-if "ΟΛΟΙ" not in f_teach: df_view = df_view[df_view['teacher'].isin(f_teach)]
-if "ΟΛΟΙ" not in f_type: df_view = df_view[df_view['type'].isin(f_type)]
+if not df_view.empty:
+    if "ΟΛΑ" not in f_dept: df_view = df_view[df_view['dept'].isin(f_dept)]
+    if "ΟΛΟΙ" not in f_teach: df_view = df_view[df_view['teacher'].isin(f_teach)]
+    if "ΟΛΟΙ" not in f_type: df_view = df_view[df_view['type'].isin(f_type)]
 
-# 4. ΗΜΕΡΟΛΟΓΙΟ
 cal_options = {
     "locale": "el",
     "headerToolbar": {"left": "prev,next today", "center": "title", "right": "dayGridMonth,dayGridWeek,timeGridDay,listWeek"},
@@ -251,7 +251,6 @@ cal_options = {
 }
 state = calendar(events=df_view.to_dict(orient='records'), options=cal_options)
 
-# 5. MODAL ΔΙΑΧΕΙΡΙΣΗΣ ΜΕ ΠΛΗΡΗ ΠΕΔΙΑ ΚΑΙ ΜΟΝΑΔΙΚΑ KEYS
 if state.get("eventClick"):
     @st.dialog("⚙️ Διαχείριση Εγγραφής")
     def edit_modal(ev_id):
@@ -318,23 +317,16 @@ if state.get("eventClick"):
 
     edit_modal(state["eventClick"]["event"]["id"])
 
-# 6. ΠΙΝΑΚΑΣ ΙΣΤΟΡΙΚΟΥ
 st.write("---")
 st.subheader("📋 Ιστορικό Εγγραφών")
 
-columns_to_show = ['created_at', 'start', 'dept', 'teacher', 'lesson', 'hours', 'type', 'notes']
-
-st.dataframe(
-    df_view[columns_to_show].sort_values(by='start', ascending=False),
-    use_container_width=True,
-    column_config={
-        "created_at": "Ημ/νία Καταχώρησης",
-        "start": "Ημ/νία Διεξαγωγής",
-        "dept": "Τμήμα",
-        "teacher": "Καθηγητής",
-        "lesson": "Μάθημα/Δράση",
-        "hours": "Ώρες",
-        "type": "Τύπος",
-        "notes": "Σχόλια"
-    }
-)
+if not df_view.empty:
+    columns_to_show = ['created_at', 'start', 'dept', 'teacher', 'lesson', 'hours', 'type', 'notes']
+    st.dataframe(
+        df_view[columns_to_show].sort_values(by='start', ascending=False),
+        use_container_width=True,
+        column_config={
+            "created_at": "Ημ/νία Καταχώρησης", "start": "Ημ/νία Διεξαγωγής", "dept": "Τμήμα",
+            "teacher": "Καθηγητής", "lesson": "Μάθημα/Δράση", "hours": "Ώρες", "type": "Τύπος", "notes": "Σχόλια"
+        }
+    )
