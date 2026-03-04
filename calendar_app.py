@@ -154,7 +154,7 @@ if sel_type: df_view = df_view[df_view['type'].isin(sel_type)]
 if sel_teacher: df_view = df_view[df_view['teacher'].isin(sel_teacher)]
 
 
-# --- ΛΕΙΤΟΥΡΓΙΑ ΑΝΑΔΥΟΜΕΝΟΥ ΠΑΡΑΘΥΡΟΥ (POP-UP) ΓΙΑ ΕΠΕΞΕΡΓΑΣΙΑ ---
+# --- ΛΕΙΤΟΥΡΓΙΑ ΑΝΑΔΥΟΜΕΝΟΥ ΠΑΡΑΘΥΡΟΥ (POP-UP) ΓΙΑ ΕΠΕΞΕΡΓΑΣΙΑ ΟΛΩΝ ΤΩΝ ΠΕΔΙΩΝ ---
 @st.dialog("✏️ Επεξεργασία Εγγραφής")
 def edit_event_modal(ev_id):
     try:
@@ -164,45 +164,79 @@ def edit_event_modal(ev_id):
         st.error("Η εγγραφή δεν βρέθηκε.")
         return
 
-    st.markdown(f"**Επιλεγμένο:** {row_data['title']}")
+    st.markdown(f"**Αρχική Εγγραφή:** {row_data['title']}")
     
-    # 1. Προεπιλογή Εκπαιδευτικού
+    # 1. Προεπιλογή Τύπου
+    type_options = ["Διαγώνισμα", "Τεστ", "Δράση"]
+    type_idx = type_options.index(row_data['type']) if row_data['type'] in type_options else 0
+    e_type = st.radio("🏷️ Αλλαγή Τύπου", type_options, index=type_idx, horizontal=True)
+
+    c1, c2 = st.columns(2)
+    # 2. Προεπιλογή Τμήματος
+    dept_options = ["ΣΧΟΛΕΙΟ"] + DEPARTMENTS
+    d_idx = dept_options.index(row_data['dept']) if row_data['dept'] in dept_options else 0
+    e_dept = c1.selectbox("👥 Αλλαγή Τμήματος", dept_options, index=d_idx)
+    
+    # 3. Προεπιλογή Εκπαιδευτικού
     t_index = curr_teachers.index(row_data['teacher']) if row_data['teacher'] in curr_teachers else 0
-    e_teacher = st.selectbox("👤 Αλλαγή Εκπαιδευτικού", curr_teachers, index=t_index)
+    e_teacher = c2.selectbox("👤 Αλλαγή Εκπαιδευτικού", curr_teachers, index=t_index)
     
-    # 2. Προεπιλογή Μαθήματος
-    if row_data['type'] != "Δράση":
+    c3, c4 = st.columns(2)
+    # 4. Προεπιλογή Μαθήματος / Δράσης
+    if e_type != "Δράση":
         l_index = LESSONS.index(row_data['lesson']) if row_data['lesson'] in LESSONS else 0
-        e_lesson = st.selectbox("📖 Αλλαγή Μαθήματος", LESSONS, index=l_index)
+        e_lesson = c3.selectbox("📖 Αλλαγή Μαθήματος", LESSONS, index=l_index)
     else:
-        e_lesson = st.text_input("🎯 Τίτλος Δράσης", value=row_data['lesson'])
+        e_lesson = c3.text_input("🎯 Τίτλος Δράσης", value=row_data['lesson'])
     
-    # 3. Προεπιλογή Ημερομηνίας
+    # 5. Προεπιλογή Ημερομηνίας
     try:
         parsed_date = pd.to_datetime(row_data['start']).date()
     except:
         parsed_date = datetime.now().date()
-    e_date = st.date_input("📅 Αλλαγή Ημερομηνίας", parsed_date)
+    e_date = c4.date_input("📅 Αλλαγή Ημερομηνίας", parsed_date)
     
-    # 4. Προεπιλογή Σχολίων
+    # 6. Προεπιλογή Ώρας
+    current_hours = [h.strip() for h in str(row_data['hours']).split(",")] if pd.notna(row_data['hours']) and str(row_data['hours']).strip() else []
+    valid_hours = [h for h in current_hours if h in HOURS]
+    e_hours = st.multiselect("⏳ Αλλαγή Ώρας", HOURS, default=valid_hours)
+
+    # 7. Προεπιλογή Σχολίων
     e_notes = st.text_area("📝 Σχόλια / Σημειώσεις", value=str(row_data.get('notes', '')))
     
     st.write("---")
     col_save, col_del = st.columns(2)
     
     if col_save.button("💾 Αποθήκευση Αλλαγών", use_container_width=True):
-        df.at[idx, 'teacher'] = e_teacher
-        df.at[idx, 'start'] = str(e_date)
-        df.at[idx, 'lesson'] = e_lesson
-        df.at[idx, 'notes'] = e_notes
-        
-        if row_data['type'] != "Δράση":
-            df.at[idx, 'title'] = f"{row_data['dept']}_Ω:{row_data['hours']}_{e_lesson}_{e_teacher}"
+        # Έλεγχος περιορισμών πριν την αποθήκευση της επεξεργασίας
+        ok, msg = check_constraints(df, e_date, e_dept, e_type, exclude_idx=idx)
+        if not ok:
+            st.error(msg)
+            play_error_sound()
         else:
-            df.at[idx, 'title'] = f"{e_lesson}_{row_data['dept']}"
+            h_s = ", ".join(sorted(e_hours))
             
-        save_data(df)
-        st.rerun()
+            # Ενημέρωση των δεδομένων
+            df.at[idx, 'type'] = e_type
+            df.at[idx, 'dept'] = e_dept
+            df.at[idx, 'teacher'] = e_teacher
+            df.at[idx, 'start'] = str(e_date)
+            df.at[idx, 'lesson'] = e_lesson
+            df.at[idx, 'hours'] = h_s
+            df.at[idx, 'notes'] = e_notes
+            
+            # Ενημέρωση Χρώματος
+            color = "#B91C1C" if e_type == "Διαγώνισμα" else ("#D97706" if e_type == "Τεστ" else "#1D4ED8")
+            df.at[idx, 'color'] = color
+            
+            # Ενημέρωση Τίτλου
+            if e_type != "Δράση":
+                df.at[idx, 'title'] = f"{e_dept}_Ω:{h_s}_{e_lesson}_{e_teacher}"
+            else:
+                df.at[idx, 'title'] = f"{e_lesson}_{e_dept}"
+                
+            save_data(df)
+            st.rerun()
         
     if col_del.button("🗑️ Διαγραφή Εγγραφής", type="primary", use_container_width=True):
         df.drop(index=idx, inplace=True)
@@ -226,13 +260,13 @@ if state.get("eventClick"):
 # --- ΠΙΝΑΚΑΣ ΔΕΔΟΜΕΝΩΝ ---
 st.write("---")
 if not df_view.empty:
-    cols_to_show = ['start', 'dept', 'lesson', 'teacher', 'type', 'notes']
+    cols_to_show = ['start', 'dept', 'lesson', 'teacher', 'type', 'hours', 'notes']
     cols_to_show = [c for c in cols_to_show if c in df_view.columns]
     
     st.dataframe(
         df_view[cols_to_show].sort_values('start').rename(columns={
             'start': 'Ημερομηνία', 'dept': 'Τμήμα', 'lesson': 'Μάθημα', 
-            'teacher': 'Εκπαιδευτικός', 'type': 'Τύπος', 'notes': 'Σχόλια'
+            'teacher': 'Εκπαιδευτικός', 'type': 'Τύπος', 'hours': 'Ώρες', 'notes': 'Σχόλια'
         }), 
         use_container_width=True
     )
