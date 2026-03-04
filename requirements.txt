@@ -3,3 +3,4 @@ streamlit-calendar
 icalendar
 pandas
 st-gsheets-connection
+openpyxl
