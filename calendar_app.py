@@ -2,8 +2,6 @@ import streamlit as st
 from streamlit_calendar import calendar
 import pandas as pd
 from datetime import datetime, timedelta
-from icalendar import Calendar
-import re
 import streamlit.components.v1 as components
 from streamlit_gsheets import GSheetsConnection
 
@@ -14,9 +12,9 @@ st.set_page_config(page_title="Σχολικό Ημερολόγιο Web", layout=
 DEPARTMENTS = ["Α1", "Α2", "Α3", "Α4", "Β1", "Β2", "Β3", "Γ1", "Γ2", "Γ3"]
 HOURS = [str(i) for i in range(1, 8)]
 LESSONS = ["ΤΕΧΝΟΛΟΓΙΑ", "ΠΛΗΡΟΦΟΡΙΚΗ", "ΟΙΚ. ΟΙΚΟΝ.", "ΒΙΟΛΟΓΙΑ", "ΦΥΣΙΚΗ", "ΧΗΜΕΙΑ", "ΜΑΘΗΜΑΤΙΚΑ", "ΓΛΩΣΣΑ", "ΑΡΧΑΙΑ", "ΘΡΗΣΚΕΥΤΙΚΑ", "ΛΟΓΟΤΕΧΝΙΑ", "ΕΡΓΑΣΤΗΡΙΟ ΔΕΞΙΟΤΗΤΩΝ", "ΜΟΥΣΙΚΗ", "ΙΣΤΟΡΙΑ", "ΜΕΤΑΦΡΑΣΗ", "ΚΑΛΛΙΤΕΧΝΙΚΑ", "ΓΕΩΓΡΑΦΙΑ", "ΑΓΓΛΙΚΑ", "ΓΕΡΜΑΝΙΚΑ", "ΓΑΛΛΙΚΑ", "ΓΥΜΝΑΣΤΙΚΗ", "Κ.Π.Α.", "ΟΙΚΟΝΟΜΙΚΑ"]
-SHEET_URL = "https://docs.google.com/spreadsheets/d/1ENw07twtEbduCWifb4tt0_sQo2iT8SiAoB9QlXnMeY0/edit?usp=sharing"
+SHEET_URL = "https://docs.google.com/spreadsheets/d/1ClSPjY3zx1eaDL2deGn1dx_9XYTFxfCQg_zXv8Ny2Cw/edit#gid=0"
 
-# Σύνδεση με χρήση των Secrets για δικαιώματα εγγραφής
+# Σύνδεση
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 # --- ΗΧΟΣ ΑΠΟΡΡΙΨΗΣ ---
@@ -39,6 +37,8 @@ def load_data():
     try:
         df = conn.read(spreadsheet=SHEET_URL, ttl=0).dropna(how="all")
         df['id'] = df.index.astype(str)
+        if 'notes' not in df.columns:
+            df['notes'] = ""
         return df.fillna("")
     except:
         return pd.DataFrame(columns=['id', 'title', 'start', 'type', 'dept', 'teacher', 'lesson', 'hours', 'created_at', 'notes', 'color'])
@@ -106,6 +106,7 @@ with st.sidebar:
         t_hours = st.multiselect("⏳ Ώρα", HOURS)
         t_type = st.radio("🏷️ Τύπος", ["Διαγώνισμα", "Τεστ", "Δράση"], horizontal=True)
         t_lesson = st.selectbox("📖 Μάθημα", LESSONS) if t_type != "Δράση" else st.text_input("🎯 Τίτλος Δράσης")
+        t_notes = st.text_area("📝 Σχόλια / Σημειώσεις")
         
         if st.button("✅ ΚΑΤΑΧΩΡΗΣΗ"):
             error_found = False
@@ -119,7 +120,7 @@ with st.sidebar:
                 for d in t_depts:
                     color = "#B91C1C" if t_type == "Διαγώνισμα" else ("#D97706" if t_type == "Τεστ" else "#1D4ED8")
                     title = f"{d}_Ω:{h_s}_{t_lesson}_{t_name}" if t_type != "Δράση" else f"{t_lesson}_{d}"
-                    new_row = {'title': title, 'start': str(t_date), 'type': t_type, 'dept': d, 'teacher': t_name, 'lesson': t_lesson, 'hours': h_s, 'created_at': datetime.now().strftime("%d/%m/%Y %H:%M"), 'color': color}
+                    new_row = {'title': title, 'start': str(t_date), 'type': t_type, 'dept': d, 'teacher': t_name, 'lesson': t_lesson, 'hours': h_s, 'created_at': datetime.now().strftime("%d/%m/%Y %H:%M"), 'notes': t_notes, 'color': color}
                     df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
                 save_data(df); st.rerun()
 
@@ -139,16 +140,19 @@ st.markdown("""
     </div>
     """, unsafe_allow_html=True)
 
-# Φίλτρα
-f1, f2 = st.columns(2)
+# --- ΦΙΛΤΡΑ ---
+st.write("### Φίλτρα Αναζήτησης")
+f1, f2, f3 = st.columns(3)
 sel_dept = f1.multiselect("🔍 Τμήμα", DEPARTMENTS, default=None)
 sel_type = f2.multiselect("🔍 Τύπος", ["Διαγώνισμα", "Τεστ", "Δράση"], default=None)
+sel_teacher = f3.multiselect("🔍 Εκπαιδευτικός", curr_teachers, default=None)
 
 df_view = df.copy()
 if sel_dept: df_view = df_view[df_view['dept'].isin(sel_dept)]
 if sel_type: df_view = df_view[df_view['type'].isin(sel_type)]
+if sel_teacher: df_view = df_view[df_view['teacher'].isin(sel_teacher)]
 
-# Ημερολόγιο
+# --- ΗΜΕΡΟΛΟΓΙΟ ---
 cal_options = {
     "locale": "el",
     "headerToolbar": {"left": "prev,next today", "center": "title", "right": "dayGridMonth,listWeek"},
@@ -156,12 +160,65 @@ cal_options = {
 }
 state = calendar(events=df_view.to_dict(orient='records'), options=cal_options)
 
-# Διαγραφή/Επεξεργασία
+# --- ΕΠΕΞΕΡΓΑΣΙΑ / ΔΙΑΓΡΑΦΗ ΜΕ ΚΛΙΚ ---
 if state.get("eventClick"):
     ev_id = state["eventClick"]["event"]["id"]
-    if st.button(f"🗑️ Διαγραφή Εγγραφής {ev_id}"):
-        df = df.drop(index=int(ev_id))
-        save_data(df); st.rerun()
+    st.write("---")
+    st.subheader("✏️ Επεξεργασία Εγγραφής")
+    
+    try:
+        idx = int(ev_id)
+        row_data = df.loc[idx]
+        
+        with st.form("edit_form"):
+            st.markdown(f"**Επιλεγμένο:** {row_data['title']}")
+            
+            c1, c2 = st.columns(2)
+            t_index = curr_teachers.index(row_data['teacher']) if row_data['teacher'] in curr_teachers else 0
+            e_teacher = c1.selectbox("Αλλαγή Εκπαιδευτικού", curr_teachers, index=t_index)
+            
+            try:
+                parsed_date = pd.to_datetime(row_data['start']).date()
+            except:
+                parsed_date = datetime.now().date()
+            e_date = c2.date_input("Αλλαγή Ημερομηνίας", parsed_date)
+            
+            e_notes = st.text_area("Σχόλια / Σημειώσεις", value=str(row_data.get('notes', '')))
+            
+            col_save, col_del = st.columns(2)
+            btn_save = col_save.form_submit_button("💾 Αποθήκευση Αλλαγών")
+            btn_del = col_del.form_submit_button("🗑️ Διαγραφή Εγγραφής")
+            
+            if btn_save:
+                df.at[idx, 'teacher'] = e_teacher
+                df.at[idx, 'start'] = str(e_date)
+                df.at[idx, 'notes'] = e_notes
+                # Ενημέρωση του τίτλου αν άλλαξε ο εκπαιδευτικός
+                if row_data['type'] != "Δράση":
+                    df.at[idx, 'title'] = f"{row_data['dept']}_Ω:{row_data['hours']}_{row_data['lesson']}_{e_teacher}"
+                save_data(df)
+                st.success("Οι αλλαγές αποθηκεύτηκαν επιτυχώς!")
+                st.rerun()
+                
+            if btn_del:
+                df = df.drop(index=idx)
+                save_data(df)
+                st.warning("Η εγγραφή διαγράφηκε!")
+                st.rerun()
+    except Exception as e:
+        st.error("Η εγγραφή δεν βρέθηκε. Ενδέχεται να έχει ήδη διαγραφεί.")
 
+# --- ΠΙΝΑΚΑΣ ΔΕΔΟΜΕΝΩΝ ---
 st.write("---")
-st.dataframe(df_view[['start', 'dept', 'teacher', 'lesson', 'type']].sort_values('start'), use_container_width=True)
+if not df_view.empty:
+    cols_to_show = ['start', 'dept', 'lesson', 'teacher', 'type', 'notes']
+    # Αν υπάρχουν στήλες που λείπουν, τις αγνοούμε για αποφυγή σφαλμάτων
+    cols_to_show = [c for c in cols_to_show if c in df_view.columns]
+    
+    st.dataframe(
+        df_view[cols_to_show].sort_values('start').rename(columns={
+            'start': 'Ημερομηνία', 'dept': 'Τμήμα', 'lesson': 'Μάθημα', 
+            'teacher': 'Εκπαιδευτικός', 'type': 'Τύπος', 'notes': 'Σχόλια'
+        }), 
+        use_container_width=True
+    )
